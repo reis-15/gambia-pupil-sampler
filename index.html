@@ -93,6 +93,7 @@ summary{cursor:pointer;font-weight:600;min-height:44px;display:flex;align-items:
   <noscript><p class="alert">This tool needs JavaScript. Open the file in Chrome, Firefox, Safari or Edge.</p></noscript>
   <div id="storageWarn"></div>
   <main id="app"></main>
+  <p class="muted noprint" style="margin-top:36px">Build <span id="buildLabel"></span> · The Gambia RCT · MoBSE | Think Equal</p>
 </div>
 
 <script>
@@ -154,12 +155,21 @@ function checkDigits(s){
   for (let i = 0; i < s.length; i++) sum += CK.indexOf(s[i]) * (i + 1);
   return String(sum % 97).padStart(2, "0");
 }
+/* Child ID (format 2): school code, child number 01-10, two check digits, e.g. 0123-01-19. */
 function childId(code, slot){
+  const base = code + "-" + String(slot).padStart(2, "0");
+  return base + "-" + checkDigits(base);
+}
+/* Format 1 (build r1/r2), kept so schools already sampled still open and verify. */
+function childIdLegacy(code, slot){
   const base = "GMB26-S" + code + "-P" + String(slot).padStart(2, "0");
   return base + "-" + checkDigits(base);
 }
 function idIsValid(id){
-  const m = /^(GMB26-S[A-Z0-9-]{1,20}-P\d{2})-(\d{2})$/.exec(String(id).trim().toUpperCase());
+  const t = String(id).trim().toUpperCase();
+  let m = /^(.+-\d{2})-(\d{2})$/.exec(t);
+  if (m && /^[A-Z0-9-]{1,20}-(0[1-9]|10)$/.test(m[1]) && checkDigits(m[1]) === m[2]) return true;
+  m = /^(GMB26-S[A-Z0-9-]{1,20}-P\d{2})-(\d{2})$/.exec(t);
   return !!m && checkDigits(m[1]) === m[2];
 }
 function fingerprint(rec){
@@ -177,6 +187,16 @@ const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 const app = $("#app");
 $("#algoLabel").textContent = ALGO;
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const BUILD = "r3";
+const GENDERS = ["Female", "Male"];
+function emisProblem(v){
+  v = String(v || "").toUpperCase();
+  if (!v) return "Enter the school’s EMIS code.";
+  if (/\s/.test(v)) return "The EMIS code cannot contain spaces.";
+  if (!/^[A-Z0-9\-_\/]+$/.test(v)) return "The EMIS code can only use letters, numbers, hyphens, slashes and underscores.";
+  if (v.length > 30) return "The EMIS code is longer than 30 characters.";
+  return "";
+}
 const REGIONS = ["RED 3", "RED 5 North", "RED 5 South", "RED 6"];
 const LEVELS = ["ECD 1", "ECD 2", "ECD 3"];
 const KEY = "gmb_ps3_records_v1";
@@ -211,7 +231,7 @@ function renderHome(){
   const list = records.length
     ? records.map(r => {
         const n = (r.names || []).filter(x => x && x.trim()).length;
-        return `<button class="rec" data-open="${esc(r.id)}"><span>${esc(r.school)} <small>Code ${esc(r.code)} · ${esc(niceDate(r.date))} · ${n}/10 names</small></span><span aria-hidden="true">Open</span></button>`;
+        return `<button class="rec" data-open="${esc(r.id)}"><span>${esc(r.school)} <small>Code ${esc(r.code)}${r.emis ? " · EMIS " + esc(r.emis) : ""} · ${esc(niceDate(r.date))} · ${n}/10 names</small></span><span aria-hidden="true">Open</span></button>`;
       }).join("")
     : `<p class="muted">No schools on this device yet. Start a new school when you are at the school with the class registers.</p>`;
   app.innerHTML = `
@@ -228,9 +248,9 @@ function renderHome(){
     <p class="note">Children’s names are kept on this device until you delete the record. Save the names file for MoBSE after every school.</p>
     <details id="rev"><summary>Reviewer tools</summary>
       <h3 style="margin-top:12px">Check a Child ID</h3>
-      <p class="muted">Type an ID as it appears on an ICA or DCA form. The last two digits catch most typing mistakes.</p>
+      <p class="muted">Type an ID as it appears on an ICA or DCA form. The last two digits catch typing mistakes.</p>
       <label for="idIn">Child ID</label>
-      <input id="idIn" autocomplete="off" autocapitalize="characters" placeholder="GMB26-S0123-P01-00">
+      <input id="idIn" autocomplete="off" autocapitalize="characters" placeholder="0123-01-19">
       <p id="idOut" aria-live="polite" style="margin-top:8px"></p>
       <h3 style="margin-top:22px">Self-test</h3>
       <p class="muted">Checks the sampling engine against the Excel sampler, and checks that neighbouring school codes give unrelated samples. Takes a few seconds.</p>
@@ -251,7 +271,7 @@ function renderHome(){
 }
 
 function newDraft(){
-  return {enumerator:"", date:todayISO(), school:"", code:"", region:"", n:"",
+  return {enumerator:"", date:todayISO(), school:"", code:"", emis:"", region:"", n:"",
           classes:Array.from({length:6}, () => ({name:"", teacher:"", level:"", count:""})), confirm:false};
 }
 
@@ -264,6 +284,11 @@ function validateDraft(d){
   else if (/\s/.test(code)) p.push("The school code cannot contain spaces.");
   else if (!/^[A-Z0-9-]+$/.test(code)) p.push("The school code can only use letters, numbers and hyphens.");
   else if (code.length > 20) p.push("The school code is longer than 20 characters.");
+  if (code && /^[A-Z0-9-]+$/.test(code)){
+    const dup = records.find(r => r.code === code);
+    if (dup) p.push("School code " + code + " is already on this device (" + dup.school + "). Open it from the schools list. Never sample a school twice.");
+  }
+  { const e = emisProblem(d.emis); if (e) p.push(e); }
   if (!REGIONS.includes(d.region)) p.push("Choose the region.");
   const dt = new Date(d.date + "T00:00:00");
   if (!d.date || isNaN(dt) || dt.getFullYear() < 2000 || dt.getFullYear() > 2099) p.push("Enter a valid visit date.");
@@ -311,6 +336,9 @@ function renderSetup(){
     <label for="code">Official school code</label>
     <input id="code" data-f="code" value="${esc(d.code)}" autocomplete="off" autocapitalize="characters" spellcheck="false">
     <p class="muted" style="margin-top:6px">Copy the code exactly, including leading zeros. Letters, numbers and hyphens only.</p>
+    <label for="emis">School EMIS code</label>
+    <input id="emis" data-f="emis" value="${esc(d.emis)}" autocomplete="off" autocapitalize="characters" spellcheck="false">
+    <p class="muted" style="margin-top:6px">The school’s unique EMIS ID. Copy it exactly. It does not affect which children are selected.</p>
 
     <h2>2. Classes</h2>
     <p class="muted">Count every eligible child in each ECD class, including absentees. Number them 1, 2, 3 in the existing register order. List the classes in the same order every time.</p>
@@ -329,7 +357,7 @@ function renderSetup(){
   $("#backBtn").onclick = renderHome;
   $$("[data-f]").forEach(el => el.oninput = el.onchange = () => {
     const f = el.dataset.f;
-    if (f === "code") el.value = el.value.toUpperCase();
+    if (f === "code" || f === "emis") el.value = el.value.toUpperCase();
     draft[f] = el.value;
     if (f === "n") { renderSetup(); const x = $("#ncls"); x.focus(); } else updateStatus();
   });
@@ -360,11 +388,11 @@ function generate(){
   const res = draw(seed, classes.map(c => c.count));
   if (!res.ok){ alert("The draw stopped (" + res.reason + "). Contact your supervisor. Do not redraw."); return; }
   const rec = {
-    id: uid(), created: new Date().toISOString(), algo: ALGO,
-    enumerator: draft.enumerator.trim(), date: draft.date, school: draft.school.trim(), code, region: draft.region,
+    id: uid(), created: new Date().toISOString(), algo: ALGO, idv: 2,
+    enumerator: draft.enumerator.trim(), date: draft.date, school: draft.school.trim(), code, emis: draft.emis.toUpperCase().trim(), region: draft.region,
     classes, seed, total: v.total,
     picks: res.picks.map(p => ({slot:p.slot, cls:p.cls, pos:p.pos, id:childId(code, p.slot)})),
-    names: Array(SAMPLE_N).fill(""), present: Array(SAMPLE_N).fill("")
+    names: Array(SAMPLE_N).fill(""), present: Array(SAMPLE_N).fill(""), gender: Array(SAMPLE_N).fill("")
   };
   records.unshift(rec); saveRecords();
   renderSample(rec.id);
@@ -373,8 +401,9 @@ function generate(){
 function renderSample(id){
   const rec = records.find(r => r.id === id); if (!rec) return renderHome();
   draft = null;
+  if (!Array.isArray(rec.gender)) rec.gender = Array(SAMPLE_N).fill("");
   const re = draw(seedFromCode(rec.code), rec.classes.map(c => c.count));
-  const intact = re.ok && re.picks.every((p, i) => p.cls === rec.picks[i].cls && p.pos === rec.picks[i].pos && childId(rec.code, p.slot) === rec.picks[i].id);
+  const intact = re.ok && re.picks.every((p, i) => p.cls === rec.picks[i].cls && p.pos === rec.picks[i].pos && (rec.idv === 2 ? childId : childIdLegacy)(rec.code, p.slot) === rec.picks[i].id);
   const rows = rec.picks.map((p, i) => {
     const c = rec.classes[p.cls - 1];
     return `<div class="pick">
@@ -382,6 +411,9 @@ function renderSample(id){
       <div class="where">Child ${p.slot} of 10 · C0${p.cls} ${esc(c.name)} · ${esc(c.level)} · ${esc(c.teacher)}</div>
       <label for="nm${i}" style="margin-top:4px">Child’s name (MoBSE confidential)</label>
       <input id="nm${i}" data-n="${i}" value="${esc(rec.names[i])}" autocomplete="off">
+      <div class="seg" role="group" aria-label="Gender, child ${p.slot}">
+        ${GENDERS.map(g => `<button data-g="${i}" data-v="${g}" aria-pressed="${rec.gender[i] === g}">${g}</button>`).join("")}
+      </div>
       <div class="seg" role="group" aria-label="Present today? Child ${p.slot}">
         <button data-p="${i}" data-v="Yes" aria-pressed="${rec.present[i] === "Yes"}">Present today</button>
         <button data-p="${i}" data-v="No" aria-pressed="${rec.present[i] === "No"}">Absent today</button>
@@ -392,14 +424,20 @@ function renderSample(id){
     <h2 style="margin-top:0">${esc(rec.school)}</h2>
     <dl class="kv">
       <dt>School code</dt><dd>${esc(rec.code)}</dd>
+      <dt>EMIS code</dt><dd>${esc(rec.emis || "Not recorded")}</dd>
       <dt>Region</dt><dd>${esc(rec.region)}</dd>
       <dt>Visit</dt><dd>${esc(niceDate(rec.date))} · ${esc(rec.enumerator)}</dd>
       <dt>Eligible</dt><dd>${rec.total} children in ${rec.classes.length} ${rec.classes.length === 1 ? "class" : "classes"} (${rec.classes.map((c, i) => "C0" + (i + 1) + ": " + c.count).join(", ")})</dd>
       <dt>Seed</dt><dd>${rec.seed} · ${esc(rec.algo)}</dd>
     </dl>
+    <div class="noprint">
+      <label for="emisEdit">School EMIS code</label>
+      <input id="emisEdit" value="${esc(rec.emis || "")}" autocomplete="off" autocapitalize="characters" spellcheck="false" style="max-width:320px">
+      <p class="muted" id="emisMsg" aria-live="polite" style="margin-top:6px">${rec.emis ? "Edit if you made a typing mistake. This does not change the sample." : "Enter the EMIS code for this school."}</p>
+    </div>
     ${intact ? "" : `<p class="alert">This record no longer reproduces from its school code and counts. Stop and contact your supervisor. Keep this file.</p>`}
     <h2>Find these 10 children</h2>
-    <p class="muted">In each class, count to the register position shown, using only eligible children. Type the child’s name and say whether they are present. Do not replace anyone.</p>
+    <p class="muted">In each class, count to the register position shown, using only eligible children. Type the child’s name, choose their gender and say whether they are present. Gender is recorded after selection and does not affect who is chosen. Do not replace anyone.</p>
     <div class="panel noprint" id="prog" aria-live="polite"></div>
     ${rows}
     <h2 class="noprint">Save this record</h2>
@@ -415,8 +453,8 @@ function renderSample(id){
       <button class="danger" id="delBtn">Delete this record from the device</button>
     </details>`;
   const prog = () => {
-    const nn = rec.names.filter(x => x && x.trim()).length, aa = rec.present.filter(Boolean).length;
-    $("#prog").innerHTML = `Names entered: <b>${nn}/10</b> · Attendance recorded: <b>${aa}/10</b>`;
+    const nn = rec.names.filter(x => x && x.trim()).length, aa = rec.present.filter(Boolean).length, gg = rec.gender.filter(Boolean).length;
+    $("#prog").innerHTML = `Names entered: <b>${nn}/10</b> · Gender: <b>${gg}/10</b> · Attendance: <b>${aa}/10</b>`;
   };
   prog();
   $("#backBtn").onclick = renderHome;
@@ -427,6 +465,18 @@ function renderSample(id){
     $$(`[data-p="${i}"]`).forEach(x => x.setAttribute("aria-pressed", String(rec.present[i] === x.dataset.v)));
     prog();
   });
+  $$("[data-g]").forEach(b => b.onclick = () => {
+    const i = +b.dataset.g, v = b.dataset.v;
+    rec.gender[i] = rec.gender[i] === v ? "" : v; saveRecords();
+    $$(`[data-g="${i}"]`).forEach(x => x.setAttribute("aria-pressed", String(rec.gender[i] === x.dataset.v)));
+    prog();
+  });
+  $("#emisEdit").oninput = e => {
+    e.target.value = e.target.value.toUpperCase();
+    const prob = emisProblem(e.target.value);
+    if (prob) $("#emisMsg").textContent = prob;
+    else { rec.emis = e.target.value.trim(); saveRecords(); $("#emisMsg").textContent = "Saved."; }
+  };
   $("#exNames").onclick = () => exportCsv(rec, true);
   $("#exCoded").onclick = () => exportCsv(rec, false);
   $("#exPrint").onclick = () => window.print();
@@ -444,15 +494,19 @@ function csvCell(v){
   return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 function csvFor(recs, withNames){
-  const head = ["School code","Region","Visit date","Algorithm","Seed","Class order and eligible counts","Total eligible","Slot","Child ID","Class","ECD level","Register position","Present today"];
-  if (withNames) head.splice(1, 0, "School name"), head.push("Class name","Teacher","Child name","Enumerator");
+  const head = withNames
+    ? ["School code","School name","EMIS code","Region","Visit date","Algorithm","Seed","Class order and eligible counts","Total eligible","Slot","Child ID","Class","ECD level","Register position","Gender","Present today","Class name","Teacher","Child name","Enumerator"]
+    : ["School code","EMIS code","Region","Visit date","Algorithm","Seed","Class order and eligible counts","Total eligible","Slot","Child ID","Class","ECD level","Register position","Gender","Present today"];
   const lines = [head.map(csvCell).join(",")];
   recs.forEach(rec => {
     const countsStr = rec.classes.map((c, i) => "C0" + (i + 1) + "=" + c.count).join(" ");
+    const gender = Array.isArray(rec.gender) ? rec.gender : [];
     rec.picks.forEach((p, i) => {
       const c = rec.classes[p.cls - 1];
-      const row = [rec.code, rec.region, rec.date, rec.algo, rec.seed, countsStr, rec.total, p.slot, p.id, "C0" + p.cls, c.level, p.pos, rec.present[i] || ""];
-      if (withNames) row.splice(1, 0, rec.school), row.push(c.name, c.teacher, rec.names[i] || "", rec.enumerator);
+      const mid = [rec.region, rec.date, rec.algo, rec.seed, countsStr, rec.total, p.slot, p.id, "C0" + p.cls, c.level, p.pos, gender[i] || "", rec.present[i] || ""];
+      const row = withNames
+        ? [rec.code, rec.school, rec.emis || ""].concat(mid, [c.name, c.teacher, rec.names[i] || "", rec.enumerator])
+        : [rec.code, rec.emis || ""].concat(mid);
       lines.push(row.map(csvCell).join(","));
     });
   });
@@ -519,14 +573,22 @@ function runSelfTest(){
     add(fails === 0 && dupes === 0 && range === 0, `20,000 simulated schools: no failed draws, duplicates or out-of-range positions`);
     add(chi > 103 - 4 * 14.4 && chi < 103 + 4 * 14.4, `Every register position is equally likely (chi-square ${chi.toFixed(1)}, expected about 103 ± 14)`);
     add(Math.abs(lag1) < 0.03 && Math.abs(lag3) < 0.03, `Neighbouring school codes are unrelated (correlation ${lag1.toFixed(3)} and ${lag3.toFixed(3)}; the Excel seed gave 0.324 and −0.333)`);
-    const base = "GMB26-S0123-P01", good = base + "-" + checkDigits(base);
-    let caught = 0, tried = 0;
+    const base = "0123-01", chk = checkDigits(base);
+    let caught = 0, tried = 0, swCaught = 0, swTried = 0;
     for (let i = 0; i < base.length; i++) for (const ch of CK){
       if (ch === base[i]) continue; tried++;
-      const bad = base.slice(0, i) + ch + base.slice(i + 1) + "-" + checkDigits(base);
-      if (!idIsValid(bad)) caught++;
+      if (checkDigits(base.slice(0, i) + ch + base.slice(i + 1)) !== chk) caught++;
     }
-    add(idIsValid(good) && caught === tried, `ID check digits catch every single-character typo (${caught} of ${tried})`);
+    for (let i = 0; i < base.length - 1; i++){
+      if (base[i] === base[i + 1]) continue; swTried++;
+      const sw = base.slice(0, i) + base[i + 1] + base[i] + base.slice(i + 2);
+      if (checkDigits(sw) !== chk) swCaught++;
+    }
+    add(idIsValid(childId("0123", 1)) && idIsValid(childIdLegacy("0123", 1)) && !idIsValid("0123-01-00") && caught === tried && swCaught === swTried,
+        `ID check digits catch every single-character typo (${caught} of ${tried}) and every swapped pair (${swCaught} of ${swTried})`);
+    const ids = new Set(); let n = 0;
+    for (let i = 1; i <= 2000; i++) for (let sl = 1; sl <= 10; sl++){ ids.add(childId(String(i).padStart(4, "0"), sl)); n++; }
+    add(ids.size === n, `${n.toLocaleString()} child IDs across 2,000 school codes are all different`);
     out.innerHTML = L.join("");
   }, 30);
 }
@@ -550,6 +612,7 @@ if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)){
 }
 
 /* -------------------------------- start ------------------------------- */
+$("#buildLabel").textContent = BUILD;
 loadRecords();
 saveRecords();
 renderHome();

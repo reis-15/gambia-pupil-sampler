@@ -1,11 +1,18 @@
 /* Service worker for the pupil sampler. Cache-first, so the app opens with no signal
    and never changes behind the enumerators' backs. To release a new version, change
    CACHE below and upload the new files. */
-const CACHE = "gmb-pupil-sampler-GMB-PS3.0-r1";
+const CACHE = "gmb-pupil-sampler-GMB-PS3.0-r3";
 const FILES = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./icon-maskable-512.png", "./icon-180.png"];
 
 self.addEventListener("install", e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
+  // cache: "reload" skips the browser's own HTTP cache, so a new release never stores a stale copy
+  e.waitUntil(
+    caches.open(CACHE)
+      .then(c => Promise.all(FILES.map(f =>
+        fetch(new Request(f, {cache: "reload"})).then(r => { if (!r.ok) throw new Error("fetch failed: " + f); return c.put(f, r); })
+      )))
+      .then(() => self.skipWaiting())
+  );
 });
 self.addEventListener("activate", e => {
   e.waitUntil(caches.keys()

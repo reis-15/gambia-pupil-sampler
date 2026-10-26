@@ -23,6 +23,14 @@ IMPORTANT
 - Data stays on the phone, tied to this web address. If the address changes,
   the new address shows an empty list. Choose the address first and keep it.
 - Save the names file for MoBSE after every school.
-- To release a changed version, edit CACHE in sw.js and upload all files. Do not
-  change the app once baseline sampling has started: it would break
-  reproducibility.
+- To release a changed version, upload all the new files and change the CACHE
+  name in sw.js (for example -r2 to -r3). Wait about 10 minutes. Phones update
+  after being closed and reopened once or twice with signal. The Build number at
+  the bottom of the app shows which version a phone has. Saved schools are kept.
+- Do not change the sampling engine once baseline has started: saved schools
+  would show a "no longer reproduces" warning.
+
+BUILD HISTORY
+r1  first release
+r2  added school EMIS code and learner gender (Female/Male); build number shown
+r3  shorter Child IDs (e.g. 0123-01-19); warns if a school code is sampled twice on a phone
