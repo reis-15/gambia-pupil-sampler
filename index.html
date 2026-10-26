@@ -71,6 +71,7 @@ summary{cursor:pointer;font-weight:600;min-height:44px;display:flex;align-items:
 .tests{list-style:none;padding:0;margin:10px 0;font-size:14px}
 .tests li{padding:5px 0;border-bottom:1px solid var(--concrete)}
 .pass{font-weight:700}.fail{font-weight:700;color:var(--red)}
+.seg button:disabled{opacity:.7;cursor:not-allowed}
 .printonly{display:none}
 @media print{
   body{font-size:12px}
@@ -187,15 +188,32 @@ const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 const app = $("#app");
 $("#algoLabel").textContent = ALGO;
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const BUILD = "r3";
+const BUILD = "r4";
 const GENDERS = ["Female", "Male"];
 function emisProblem(v){
   v = String(v || "").toUpperCase();
-  if (!v) return "Enter the school’s EMIS code.";
+  if (!v) return "Enter the school’s EMIS code. If it is missing, ask your supervisor before sampling.";
   if (/\s/.test(v)) return "The EMIS code cannot contain spaces.";
-  if (!/^[A-Z0-9\-_\/]+$/.test(v)) return "The EMIS code can only use letters, numbers, hyphens, slashes and underscores.";
-  if (v.length > 30) return "The EMIS code is longer than 30 characters.";
+  if (!/^[A-Z0-9-]+$/.test(v)) return "The EMIS code can only use letters, numbers and hyphens.";
+  if (v.length > 20) return "The EMIS code is longer than 20 characters.";
   return "";
+}
+function fmtDateTime(iso){
+  const d = new Date(iso); if (isNaN(d)) return "";
+  return d.toLocaleString("en-GB", {day:"numeric", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit"});
+}
+const isDone = r => r.status === "completed";
+function completionProblems(rec){
+  const p = [];
+  rec.picks.forEach((x, i) => {
+    const miss = [];
+    if (!(rec.names[i] || "").trim()) miss.push("name");
+    if (!rec.gender[i]) miss.push("gender");
+    if (!rec.present[i]) miss.push("attendance");
+    if (miss.length) p.push("Child " + x.slot + " (" + x.id + "): " + miss.join(", "));
+  });
+  if (emisProblem(rec.emisIsCode ? rec.code : rec.emis)) p.push("The school’s EMIS code is missing or not valid.");
+  return p;
 }
 const REGIONS = ["RED 3", "RED 5 North", "RED 5 South", "RED 6"];
 const LEVELS = ["ECD 1", "ECD 2", "ECD 3"];
@@ -231,7 +249,7 @@ function renderHome(){
   const list = records.length
     ? records.map(r => {
         const n = (r.names || []).filter(x => x && x.trim()).length;
-        return `<button class="rec" data-open="${esc(r.id)}"><span>${esc(r.school)} <small>Code ${esc(r.code)}${r.emis ? " · EMIS " + esc(r.emis) : ""} · ${esc(niceDate(r.date))} · ${n}/10 names</small></span><span aria-hidden="true">Open</span></button>`;
+        return `<button class="rec" data-open="${esc(r.id)}"><span>${esc(r.school)} <small>${r.emisIsCode ? "EMIS " + esc(r.code) : "Code " + esc(r.code) + (r.emis ? " · EMIS " + esc(r.emis) : "")} · ${esc(niceDate(r.date))} · ${n}/10 names · <b>${isDone(r) ? "Completed" : "In progress"}</b></small></span><span aria-hidden="true">Open</span></button>`;
       }).join("")
     : `<p class="muted">No schools on this device yet. Start a new school when you are at the school with the class registers.</p>`;
   app.innerHTML = `
@@ -253,7 +271,7 @@ function renderHome(){
       <input id="idIn" autocomplete="off" autocapitalize="characters" placeholder="0123-01-19">
       <p id="idOut" aria-live="polite" style="margin-top:8px"></p>
       <h3 style="margin-top:22px">Self-test</h3>
-      <p class="muted">Checks the sampling engine against the Excel sampler, and checks that neighbouring school codes give unrelated samples. Takes a few seconds.</p>
+      <p class="muted">Checks the sampling engine against the Excel sampler, and checks that neighbouring EMIS codes give unrelated samples. Takes a few seconds.</p>
       <div class="actions"><button id="testBtn">Run self-test</button></div>
       <ul class="tests" id="testOut" aria-live="polite"></ul>
     </details>`;
@@ -271,31 +289,27 @@ function renderHome(){
 }
 
 function newDraft(){
-  return {enumerator:"", date:todayISO(), school:"", code:"", emis:"", region:"", n:"",
-          classes:Array.from({length:6}, () => ({name:"", teacher:"", level:"", count:""})), confirm:false};
+  return {enumerator:"", date:todayISO(), school:"", emis:"", region:"", n:"",
+          classes:Array.from({length:9}, () => ({name:"", teacher:"", level:"", count:""})), confirm:false};
 }
 
 function validateDraft(d){
   const p = [];
-  const code = d.code.toUpperCase();
+  const code = d.emis.toUpperCase();
   if (!d.enumerator.trim()) p.push("Enter your name.");
   if (!d.school.trim()) p.push("Enter the school name.");
-  if (!code) p.push("Enter the official school code. If it is missing, ask your supervisor before sampling.");
-  else if (/\s/.test(code)) p.push("The school code cannot contain spaces.");
-  else if (!/^[A-Z0-9-]+$/.test(code)) p.push("The school code can only use letters, numbers and hyphens.");
-  else if (code.length > 20) p.push("The school code is longer than 20 characters.");
-  if (code && /^[A-Z0-9-]+$/.test(code)){
-    const dup = records.find(r => r.code === code);
-    if (dup) p.push("School code " + code + " is already on this device (" + dup.school + "). Open it from the schools list. Never sample a school twice.");
+  { const e = emisProblem(code); if (e) p.push(e); }
+  if (code && !emisProblem(code)){
+    const dup = records.find(r => r.code === code || String(r.emis || "").toUpperCase() === code);
+    if (dup) p.push("EMIS code " + code + " is already on this device (" + dup.school + "). Open it from the schools list. Never sample a school twice.");
   }
-  { const e = emisProblem(d.emis); if (e) p.push(e); }
   if (!REGIONS.includes(d.region)) p.push("Choose the region.");
   const dt = new Date(d.date + "T00:00:00");
   if (!d.date || isNaN(dt) || dt.getFullYear() < 2000 || dt.getFullYear() > 2099) p.push("Enter a valid visit date.");
   const n = Number(d.n);
-  const nOk = d.n !== "" && Number.isInteger(n) && n >= 1 && n <= 6;
+  const nOk = d.n !== "" && Number.isInteger(n) && n >= 1 && n <= 9;
   if (d.n === "") p.push("Choose how many eligible ECD classes the school has.");
-  else if (!nOk) p.push("Enter 1 to 6 classes. For more than 6, contact your supervisor.");
+  else if (!nOk) p.push("Enter 1 to 9 classes. For more than 9, contact your supervisor.");
   let total = 0, countsOk = nOk;
   if (nOk){
     for (let i = 0; i < n; i++){
@@ -313,7 +327,7 @@ function validateDraft(d){
 
 function renderSetup(){
   const d = draft;
-  const n = Number(d.n); const nShow = Number.isInteger(n) && n >= 1 && n <= 6 ? n : 0;
+  const n = Number(d.n); const nShow = Number.isInteger(n) && n >= 1 && n <= 9 ? n : 0;
   const classes = Array.from({length:nShow}, (_, i) => {
     const c = d.classes[i];
     return `<fieldset class="classbox"><legend>Class C0${i + 1}</legend>
@@ -333,17 +347,14 @@ function renderSetup(){
       <div><label for="school">School name</label><input id="school" data-f="school" value="${esc(d.school)}" autocomplete="off"></div>
       <div><label for="region">Region</label><select id="region" data-f="region"><option value="">Choose</option>${REGIONS.map(r => `<option ${d.region === r ? "selected" : ""}>${r}</option>`).join("")}</select></div>
     </div>
-    <label for="code">Official school code</label>
-    <input id="code" data-f="code" value="${esc(d.code)}" autocomplete="off" autocapitalize="characters" spellcheck="false">
-    <p class="muted" style="margin-top:6px">Copy the code exactly, including leading zeros. Letters, numbers and hyphens only.</p>
     <label for="emis">School EMIS code</label>
     <input id="emis" data-f="emis" value="${esc(d.emis)}" autocomplete="off" autocapitalize="characters" spellcheck="false">
-    <p class="muted" style="margin-top:6px">The school’s unique EMIS ID. Copy it exactly. It does not affect which children are selected.</p>
+    <p class="muted" style="margin-top:6px">The school’s unique EMIS ID. Copy it exactly, including leading zeros. Letters, numbers and hyphens only. This code decides which children are selected, so it is locked once you generate the sample.</p>
 
     <h2>2. Classes</h2>
     <p class="muted">Count every eligible child in each ECD class, including absentees. Number them 1, 2, 3 in the existing register order. List the classes in the same order every time.</p>
-    <label for="ncls">How many eligible ECD classes does the school have? (1 to 6)</label>
-    <input id="ncls" type="number" inputmode="numeric" min="1" max="6" step="1" data-f="n" value="${esc(d.n)}" style="max-width:140px">
+    <label for="ncls">How many eligible ECD classes does the school have? (1 to 9)</label>
+    <input id="ncls" type="number" inputmode="numeric" min="1" max="9" step="1" data-f="n" value="${esc(d.n)}" style="max-width:140px">
     ${classes}
 
     <h2>3. Check and generate</h2>
@@ -352,12 +363,12 @@ function renderSetup(){
       <input type="checkbox" id="confirm" ${d.confirm ? "checked" : ""}>
       <span>All eligible classes and counts are checked, and the eligible registers are numbered.</span>
     </label>
-    <p class="muted">After you generate the sample, the school code, class order and counts are locked. Do not redraw. Contact your supervisor about any correction.</p>
+    <p class="muted">After you generate the sample, the EMIS code, class order and counts are locked. Do not redraw. Contact your supervisor about any correction.</p>
     <div class="actions"><button class="primary" id="gen">Generate the 10 children</button></div>`;
   $("#backBtn").onclick = renderHome;
   $$("[data-f]").forEach(el => el.oninput = el.onchange = () => {
     const f = el.dataset.f;
-    if (f === "code" || f === "emis") el.value = el.value.toUpperCase();
+    if (f === "emis") el.value = el.value.toUpperCase();
     draft[f] = el.value;
     if (f === "n") { renderSetup(); const x = $("#ncls"); x.focus(); } else updateStatus();
   });
@@ -382,14 +393,14 @@ function generate(){
   const v = validateDraft(draft);
   if (!v.ready || !draft.confirm) return;
   const n = Number(draft.n);
-  const code = draft.code.toUpperCase();
+  const code = draft.emis.toUpperCase().trim();
   const classes = draft.classes.slice(0, n).map(c => ({name:c.name.trim(), teacher:c.teacher.trim(), level:c.level, count:Number(c.count)}));
   const seed = seedFromCode(code);
   const res = draw(seed, classes.map(c => c.count));
   if (!res.ok){ alert("The draw stopped (" + res.reason + "). Contact your supervisor. Do not redraw."); return; }
   const rec = {
     id: uid(), created: new Date().toISOString(), algo: ALGO, idv: 2,
-    enumerator: draft.enumerator.trim(), date: draft.date, school: draft.school.trim(), code, emis: draft.emis.toUpperCase().trim(), region: draft.region,
+    enumerator: draft.enumerator.trim(), date: draft.date, school: draft.school.trim(), code, emis: code, emisIsCode: true, status: "in_progress", region: draft.region,
     classes, seed, total: v.total,
     picks: res.picks.map(p => ({slot:p.slot, cls:p.cls, pos:p.pos, id:childId(code, p.slot)})),
     names: Array(SAMPLE_N).fill(""), present: Array(SAMPLE_N).fill(""), gender: Array(SAMPLE_N).fill("")
@@ -401,6 +412,7 @@ function generate(){
 function renderSample(id){
   const rec = records.find(r => r.id === id); if (!rec) return renderHome();
   draft = null;
+  const locked = isDone(rec), dis = locked ? " disabled" : "";
   if (!Array.isArray(rec.gender)) rec.gender = Array(SAMPLE_N).fill("");
   const re = draw(seedFromCode(rec.code), rec.classes.map(c => c.count));
   const intact = re.ok && re.picks.every((p, i) => p.cls === rec.picks[i].cls && p.pos === rec.picks[i].pos && (rec.idv === 2 ? childId : childIdLegacy)(rec.code, p.slot) === rec.picks[i].id);
@@ -410,36 +422,48 @@ function renderSample(id){
       <div class="idrow"><span class="cid">${esc(p.id)}</span><span class="pos">Register position <b>${p.pos}</b></span></div>
       <div class="where">Child ${p.slot} of 10 · C0${p.cls} ${esc(c.name)} · ${esc(c.level)} · ${esc(c.teacher)}</div>
       <label for="nm${i}" style="margin-top:4px">Child’s name (MoBSE confidential)</label>
-      <input id="nm${i}" data-n="${i}" value="${esc(rec.names[i])}" autocomplete="off">
+      <input id="nm${i}" data-n="${i}" value="${esc(rec.names[i])}" autocomplete="off"${dis}>
       <div class="seg" role="group" aria-label="Gender, child ${p.slot}">
-        ${GENDERS.map(g => `<button data-g="${i}" data-v="${g}" aria-pressed="${rec.gender[i] === g}">${g}</button>`).join("")}
+        ${GENDERS.map(g => `<button data-g="${i}" data-v="${g}" aria-pressed="${rec.gender[i] === g}"${dis}>${g}</button>`).join("")}
       </div>
       <div class="seg" role="group" aria-label="Present today? Child ${p.slot}">
-        <button data-p="${i}" data-v="Yes" aria-pressed="${rec.present[i] === "Yes"}">Present today</button>
-        <button data-p="${i}" data-v="No" aria-pressed="${rec.present[i] === "No"}">Absent today</button>
+        <button data-p="${i}" data-v="Yes" aria-pressed="${rec.present[i] === "Yes"}"${dis}>Present today</button>
+        <button data-p="${i}" data-v="No" aria-pressed="${rec.present[i] === "No"}"${dis}>Absent today</button>
       </div></div>`;
   }).join("");
   app.innerHTML = `
     <p class="noprint"><button class="link" id="backBtn">Back to schools</button></p>
     <h2 style="margin-top:0">${esc(rec.school)}</h2>
     <dl class="kv">
-      <dt>School code</dt><dd>${esc(rec.code)}</dd>
-      <dt>EMIS code</dt><dd>${esc(rec.emis || "Not recorded")}</dd>
+      ${rec.emisIsCode
+        ? `<dt>EMIS code</dt><dd>${esc(rec.code)}</dd>`
+        : `<dt>School code (in IDs)</dt><dd>${esc(rec.code)}</dd><dt>EMIS code</dt><dd>${esc(rec.emis || "Not recorded")}</dd>`}
+      <dt>Status</dt><dd><b>${locked ? "Completed " + esc(fmtDateTime(rec.completedAt)) : "In progress"}</b>${rec.reopened ? " · reopened " + rec.reopened + (rec.reopened === 1 ? " time" : " times") : ""}</dd>
       <dt>Region</dt><dd>${esc(rec.region)}</dd>
       <dt>Visit</dt><dd>${esc(niceDate(rec.date))} · ${esc(rec.enumerator)}</dd>
       <dt>Eligible</dt><dd>${rec.total} children in ${rec.classes.length} ${rec.classes.length === 1 ? "class" : "classes"} (${rec.classes.map((c, i) => "C0" + (i + 1) + ": " + c.count).join(", ")})</dd>
       <dt>Seed</dt><dd>${rec.seed} · ${esc(rec.algo)}</dd>
     </dl>
-    <div class="noprint">
+    ${rec.emisIsCode ? "" : `<div class="noprint">
       <label for="emisEdit">School EMIS code</label>
-      <input id="emisEdit" value="${esc(rec.emis || "")}" autocomplete="off" autocapitalize="characters" spellcheck="false" style="max-width:320px">
+      <input id="emisEdit" value="${esc(rec.emis || "")}" autocomplete="off" autocapitalize="characters" spellcheck="false" style="max-width:320px"${dis}>
       <p class="muted" id="emisMsg" aria-live="polite" style="margin-top:6px">${rec.emis ? "Edit if you made a typing mistake. This does not change the sample." : "Enter the EMIS code for this school."}</p>
-    </div>
-    ${intact ? "" : `<p class="alert">This record no longer reproduces from its school code and counts. Stop and contact your supervisor. Keep this file.</p>`}
+    </div>`}
+    ${intact ? "" : `<p class="alert">This record no longer reproduces from its code and counts. Stop and contact your supervisor. Keep this file.</p>`}
     <h2>Find these 10 children</h2>
     <p class="muted">In each class, count to the register position shown, using only eligible children. Type the child’s name, choose their gender and say whether they are present. Gender is recorded after selection and does not affect who is chosen. Do not replace anyone.</p>
     <div class="panel noprint" id="prog" aria-live="polite"></div>
     ${rows}
+    <div class="noprint panel" id="doneBox">
+      ${locked
+        ? `<p class="ok" style="margin:0 0 8px">Completed ${esc(fmtDateTime(rec.completedAt))}. This school is locked.</p>
+           <p class="muted">To change a name, gender or attendance, press Edit. The change is recorded in the saved files.</p>
+           <button id="editBtn">Edit this school</button>`
+        : `<p style="margin:0 0 8px"><strong>Finished with this school?</strong></p>
+           <p class="muted">When all 10 children have a name, gender and attendance, mark the school as completed. It then locks until you press Edit.</p>
+           <button class="primary" id="doneBtn">Mark school as completed</button>
+           <div id="doneMsg" aria-live="polite"></div>`}
+    </div>
     <h2 class="noprint">Save this record</h2>
     <div class="actions noprint">
       <button class="primary" id="exNames">Save names file (MoBSE only)</button>
@@ -447,10 +471,10 @@ function renderSample(id){
       <button id="exPrint">Print or save as PDF</button>
     </div>
     <p class="note noprint">The names file lists children’s names. Keep it with MoBSE. Send Think Equal only the coded file. Copy each Child ID onto the ICA and DCA forms, including the last two digits. Use the same children and IDs at endline.</p>
-    <p class="muted noprint">If a child cannot take part, record that and keep the child in the sample. Fewer than 10 eligible children, a mixed-level class, more than six classes, or any doubt about who is eligible: stop and contact your supervisor.</p>
+    <p class="muted noprint">If a child cannot take part, record that and keep the child in the sample. Fewer than 10 eligible children, a mixed-level class, more than nine classes, or any doubt about who is eligible: stop and contact your supervisor.</p>
     <details class="noprint"><summary>Delete this record</summary>
       <p class="muted">Only delete after you have saved the names file and MoBSE has it.</p>
-      <button class="danger" id="delBtn">Delete this record from the device</button>
+      <button class="danger" id="delBtn">Delete this record from the device</button>${locked ? `<p class="muted">This school is marked completed. Be sure MoBSE has the names file.</p>` : ""}
     </details>`;
   const prog = () => {
     const nn = rec.names.filter(x => x && x.trim()).length, aa = rec.present.filter(Boolean).length, gg = rec.gender.filter(Boolean).length;
@@ -471,7 +495,23 @@ function renderSample(id){
     $$(`[data-g="${i}"]`).forEach(x => x.setAttribute("aria-pressed", String(rec.gender[i] === x.dataset.v)));
     prog();
   });
-  $("#emisEdit").oninput = e => {
+  if ($("#doneBtn")) $("#doneBtn").onclick = () => {
+    const probs = completionProblems(rec);
+    if (probs.length){
+      $("#doneMsg").innerHTML = '<p style="margin:10px 0 0"><strong>Not finished yet:</strong></p><ul class="problems">' + probs.map(x => "<li>" + esc(x) + "</li>").join("") + "</ul>";
+      return;
+    }
+    rec.status = "completed"; rec.completedAt = new Date().toISOString();
+    rec.log = (rec.log || []).concat({e:"completed", at:rec.completedAt});
+    saveRecords(); renderSample(rec.id); window.scrollTo(0, 0);
+  };
+  if ($("#editBtn")) $("#editBtn").onclick = () => {
+    if (!confirm("Reopen this completed school for editing? The change will be recorded.")) return;
+    rec.status = "in_progress"; rec.reopened = (rec.reopened || 0) + 1;
+    rec.log = (rec.log || []).concat({e:"reopened", at:new Date().toISOString()});
+    saveRecords(); renderSample(rec.id);
+  };
+  if ($("#emisEdit")) $("#emisEdit").oninput = e => {
     e.target.value = e.target.value.toUpperCase();
     const prob = emisProblem(e.target.value);
     if (prob) $("#emisMsg").textContent = prob;
@@ -495,18 +535,20 @@ function csvCell(v){
 }
 function csvFor(recs, withNames){
   const head = withNames
-    ? ["School code","School name","EMIS code","Region","Visit date","Algorithm","Seed","Class order and eligible counts","Total eligible","Slot","Child ID","Class","ECD level","Register position","Gender","Present today","Class name","Teacher","Child name","Enumerator"]
-    : ["School code","EMIS code","Region","Visit date","Algorithm","Seed","Class order and eligible counts","Total eligible","Slot","Child ID","Class","ECD level","Register position","Gender","Present today"];
+    ? ["EMIS code","School name","Legacy school code","Region","Visit date","Algorithm","Seed","Class order and eligible counts","Total eligible","Slot","Child ID","Class","ECD level","Register position","Gender","Present today","Class name","Teacher","Child name","Enumerator","Status","Completed on","Times reopened"]
+    : ["EMIS code","Legacy school code","Region","Visit date","Algorithm","Seed","Class order and eligible counts","Total eligible","Slot","Child ID","Class","ECD level","Register position","Gender","Present today","Status","Completed on","Times reopened"];
   const lines = [head.map(csvCell).join(",")];
   recs.forEach(rec => {
     const countsStr = rec.classes.map((c, i) => "C0" + (i + 1) + "=" + c.count).join(" ");
     const gender = Array.isArray(rec.gender) ? rec.gender : [];
+    const emis = rec.emisIsCode ? rec.code : (rec.emis || ""), legacy = rec.emisIsCode ? "" : rec.code;
+    const tail = [isDone(rec) ? "Completed" : "In progress", isDone(rec) ? rec.completedAt : "", rec.reopened || 0];
     rec.picks.forEach((p, i) => {
       const c = rec.classes[p.cls - 1];
       const mid = [rec.region, rec.date, rec.algo, rec.seed, countsStr, rec.total, p.slot, p.id, "C0" + p.cls, c.level, p.pos, gender[i] || "", rec.present[i] || ""];
       const row = withNames
-        ? [rec.code, rec.school, rec.emis || ""].concat(mid, [c.name, c.teacher, rec.names[i] || "", rec.enumerator])
-        : [rec.code, rec.emis || ""].concat(mid);
+        ? [emis, rec.school, legacy].concat(mid, [c.name, c.teacher, rec.names[i] || "", rec.enumerator], tail)
+        : [emis, legacy].concat(mid, tail);
       lines.push(row.map(csvCell).join(","));
     });
   });
@@ -573,6 +615,15 @@ function runSelfTest(){
     add(fails === 0 && dupes === 0 && range === 0, `20,000 simulated schools: no failed draws, duplicates or out-of-range positions`);
     add(chi > 103 - 4 * 14.4 && chi < 103 + 4 * 14.4, `Every register position is equally likely (chi-square ${chi.toFixed(1)}, expected about 103 ± 14)`);
     add(Math.abs(lag1) < 0.03 && Math.abs(lag3) < 0.03, `Neighbouring school codes are unrelated (correlation ${lag1.toFixed(3)} and ${lag3.toFixed(3)}; the Excel seed gave 0.324 and −0.333)`);
+    let nineBad = 0;
+    for (let i = 1; i <= 2000; i++){
+      const cs = Array.from({length:9}, (_, k) => 1 + ((i * 7 + k * 13) % 45));
+      const r = draw(seedFromCode("T" + i), cs);
+      if (!r.ok){ nineBad++; continue; }
+      const seen = new Set(r.picks.map(p => p.cls + ":" + p.pos));
+      if (seen.size !== 10 || r.picks.some(p => p.cls < 1 || p.cls > 9 || p.pos < 1 || p.pos > cs[p.cls - 1])) nineBad++;
+    }
+    add(nineBad === 0, "2,000 simulated schools with 9 classes: every selected position is valid and different");
     const base = "0123-01", chk = checkDigits(base);
     let caught = 0, tried = 0, swCaught = 0, swTried = 0;
     for (let i = 0; i < base.length; i++) for (const ch of CK){

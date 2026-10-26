@@ -34,3 +34,4 @@ BUILD HISTORY
 r1  first release
 r2  added school EMIS code and learner gender (Female/Male); build number shown
 r3  shorter Child IDs (e.g. 0123-01-19); warns if a school code is sampled twice on a phone
+r4  EMIS code is now the only school code; up to 9 ECD classes; Completed / Edit lock for each school; Status columns in exports

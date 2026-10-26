@@ -1,7 +1,7 @@
 /* Service worker for the pupil sampler. Cache-first, so the app opens with no signal
    and never changes behind the enumerators' backs. To release a new version, change
    CACHE below and upload the new files. */
-const CACHE = "gmb-pupil-sampler-GMB-PS3.0-r3";
+const CACHE = "gmb-pupil-sampler-GMB-PS3.0-r4";
 const FILES = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./icon-maskable-512.png", "./icon-180.png"];
 
 self.addEventListener("install", e => {
